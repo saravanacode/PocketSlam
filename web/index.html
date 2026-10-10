@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PocketSlam</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    video { width: 100%; max-height: 60vh; background: #000; border-radius: 8px; object-fit: contain; }
+    button { font-size: 1.1rem; padding: 12px; border-radius: 8px; border: none; background: #2563eb; color: #fff; }
+    button:disabled { background: #6b7280; }
+    #status { font-family: ui-monospace, monospace; font-size: 0.9rem; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>PocketSlam</h1>
+  <video id="preview" autoplay playsinline muted></video>
+  <button id="start">Start streaming</button>
+  <button id="stop" disabled>Stop</button>
+  <div id="status">Idle.</div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

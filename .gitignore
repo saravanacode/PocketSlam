@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+
+# All tool caches live in .cache/ (set in pyproject.toml).
+.cache/
+.coverage
+htmlcov/
+
+# Data, weights, recordings, outputs
+data/
+*.pt
+*.pth
+*.safetensors
+*.onnx
+
+# Secrets
+.env
+*.pem
+*.key
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

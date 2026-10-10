@@ -1,0 +1,14 @@
+# BuildKit uses this file for builds of docker/Dockerfile. Patterns are
+# anchored at the build context root, so nested matches need **/.
+.git
+.github
+.venv
+.cache
+data
+tests
+config
+**/__pycache__
+**/*.pem
+**/*.key
+**/.env
+**/.DS_Store

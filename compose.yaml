@@ -1,0 +1,22 @@
+# Linux hosts only. On macOS run natively: `uv run python -m pocketslam`
+# (Docker on macOS has no GPU access and no real host networking for WebRTC).
+services:
+  pocketslam:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: runtime
+    image: pocketslam:dev
+    # aiortc uses random UDP ports for ICE; host networking avoids publishing them.
+    network_mode: host
+    environment:
+      POCKETSLAM_TLS_CERT: /certs/cert.pem
+      POCKETSLAM_TLS_KEY: /certs/key.pem
+    env_file:
+      - path: config/.env
+        required: false
+    volumes:
+      - ./data/certs:/certs:ro
+      - ./data/outputs:/app/data/outputs
+    restart: unless-stopped
+    stop_grace_period: 15s
