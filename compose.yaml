@@ -18,5 +18,6 @@ services:
     volumes:
       - ./data/certs:/certs:ro
       - ./data/outputs:/app/data/outputs
+      - ./data/recordings:/app/data/recordings
     restart: unless-stopped
     stop_grace_period: 15s

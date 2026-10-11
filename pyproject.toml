@@ -10,13 +10,26 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "aiohttp>=3.14.4",
     "aiortc>=1.15.0",
+    "foxglove-sdk>=0.29.0",
+    "mcap>=1.5.0",
+    "mcap-protobuf-support>=0.5.4",
     "numpy>=2.5.3",
+    "pillow>=12.3.0",
     "pydantic-settings>=2.15.0",
     "torch>=2.14.1",
 ]
 
 [project.scripts]
 pocketslam = "pocketslam.__main__:main"
+pocketslam-recon = "pocketslam.recon.cli:main"
+pocketslam-marker = "pocketslam.recon.cli:marker_main"
+pocketslam-calibrate = "pocketslam.recon.cli:calibrate_main"
+
+[project.optional-dependencies]
+recon = [
+    "addict>=2.4.0",
+    "depth-anything-3==0.1.1",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.16,<0.13.0"]
@@ -27,6 +40,25 @@ build-backend = "uv_build"
 # PyPI, whose wheels include MPS support.
 [tool.uv.sources]
 torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[tool.uv]
+# depth-anything-3 0.1.1 (the `recon` extra) over-constrains its dependencies:
+# - numpy<2: the inference code runs on numpy 2, which the rest of the project needs.
+# - xformers: no macOS wheels; DA3 attention falls back to torch SDPA.
+# - gsplat: only for the Gaussian-splatting head, which we do not use.
+# - pycolmap, moviepy, open3d: only DA3's export helpers use them, and
+#   depth/da3.py stubs that module out. pycolmap also bundles a second OpenMP
+#   runtime that aborts the process next to torch's.
+# The impossible marker removes a package from resolution entirely.
+override-dependencies = [
+    "numpy>=2",
+    "xformers; sys_platform == 'never'",
+    "gsplat; sys_platform == 'never'",
+    "pycolmap; sys_platform == 'never'",
+    "moviepy; sys_platform == 'never'",
+    "open3d; sys_platform == 'never'",
+]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
@@ -87,6 +119,11 @@ mypy_path = "src"
 plugins = ["pydantic.mypy"]
 cache_dir = ".cache/mypy"
 
+# Optional `recon` extra; untyped and may be absent in the default environment.
+[[tool.mypy.overrides]]
+module = ["depth_anything_3.*", "cv2", "cv2.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--import-mode=importlib --strict-markers"
@@ -107,19 +144,32 @@ type = "forbidden"
 source_modules = ["pocketslam.core"]
 forbidden_modules = [
     "pocketslam.server", "pocketslam.transport", "pocketslam.depth",
-    "pocketslam.slam", "pocketslam.viz", "pocketslam.pipeline",
+    "pocketslam.slam", "pocketslam.viz", "pocketslam.record", "pocketslam.pipeline",
+    "pocketslam.recon", "pocketslam.calib",
 ]
 
 [[tool.importlinter.contracts]]
 name = "processing modules are independent"
 type = "independence"
-modules = ["pocketslam.transport", "pocketslam.depth", "pocketslam.slam", "pocketslam.viz"]
+modules = [
+    "pocketslam.transport", "pocketslam.depth", "pocketslam.slam", "pocketslam.viz",
+    "pocketslam.record", "pocketslam.calib",
+]
 
 [[tool.importlinter.contracts]]
 name = "nothing imports the server"
 type = "forbidden"
 source_modules = [
     "pocketslam.core", "pocketslam.transport", "pocketslam.depth",
-    "pocketslam.slam", "pocketslam.viz", "pocketslam.pipeline",
+    "pocketslam.slam", "pocketslam.viz", "pocketslam.record", "pocketslam.pipeline",
+    "pocketslam.recon", "pocketslam.calib",
 ]
 forbidden_modules = ["pocketslam.server"]
+
+[[tool.importlinter.contracts]]
+name = "offline reconstruction stays out of the live server path"
+type = "forbidden"
+source_modules = [
+    "pocketslam.server", "pocketslam.pipeline", "pocketslam.transport", "pocketslam.record",
+]
+forbidden_modules = ["pocketslam.recon"]

@@ -22,3 +22,10 @@ def test_reads_prefixed_env(monkeypatch: pytest.MonkeyPatch) -> None:
     s = Settings(_env_file=None)  # type: ignore[call-arg]
     assert s.port == 9000
     assert not s.tls_enabled
+
+
+def test_default_ports(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("POCKETSLAM_ALLOW_INSECURE", "1")
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.port == 10001
+    assert s.dashboard_ports == [8000, 8001]

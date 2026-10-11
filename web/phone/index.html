@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#e6eaee">
+  <title>PocketSlam capture</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="bar">
+    <h1>PocketSlam</h1>
+    <p id="link" class="pill" data-state="idle">Not connected</p>
+  </header>
+
+  <main>
+    <figure class="viewfinder">
+      <video id="preview" autoplay playsinline muted></video>
+      <p id="guide" class="guide" aria-live="polite" hidden></p>
+      <figcaption id="hint">Tap the button to start the camera. The laptop records while you stream.</figcaption>
+    </figure>
+
+    <dl class="readout" aria-live="polite">
+      <div><dt>Camera</dt><dd id="cam">–</dd></div>
+      <div><dt>Sent</dt><dd id="fps">–</dd></div>
+      <div><dt>Gyroscope</dt><dd id="gyro">–</dd></div>
+      <div><dt>Accelerometer</dt><dd id="accel">–</dd></div>
+    </dl>
+    <p id="api" class="note"></p>
+  </main>
+
+  <footer class="dock">
+    <button id="toggle" class="connect" type="button" aria-pressed="false">
+      <span id="toggle-label">Start streaming</span>
+    </button>
+    <button id="record" class="rec" type="button" aria-pressed="false" hidden>
+      <span class="rec-dot" aria-hidden="true"></span>
+      <span id="record-label">Record</span>
+    </button>
+    <p id="clip" class="clip" aria-live="polite" hidden></p>
+    <button id="disconnect" class="quiet" type="button" hidden>Stop streaming</button>
+    <p id="message" class="message" role="status"></p>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

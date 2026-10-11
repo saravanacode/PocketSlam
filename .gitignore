@@ -27,3 +27,6 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+# Screenshots dropped in the repo root while debugging
+/image*.png

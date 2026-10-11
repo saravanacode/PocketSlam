@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
@@ -115,12 +116,99 @@ class SessionMetadata:
         height: Actual capture height the browser delivers.
         device_label: Free-text device description, for logs only.
         intrinsics: Camera intrinsics if the phone knows them.
+        model: Phone model name if the browser reports it (calibration key).
+        orientation_deg: Screen rotation (0, 90, 180 or 270) when streaming
+            started; tells offline tools how camera axes map to IMU axes.
     """
 
     width: int
     height: int
     device_label: str = "unknown"
     intrinsics: Intrinsics | None = None
+    orientation_deg: int = 0
+    model: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ImuSample:
+    """One reading from a phone motion sensor, in the phone's device frame.
+
+    Attributes:
+        kind: ``"gyro"`` (angular velocity, rad/s) or ``"accel"``
+            (acceleration including gravity, m/s^2).
+        timestamp_s: Reading time in seconds on the phone clock (Unix epoch).
+        x: X-axis value.
+        y: Y-axis value.
+        z: Z-axis value.
+    """
+
+    kind: str
+    timestamp_s: float
+    x: float
+    y: float
+    z: float
+
+
+@dataclass(frozen=True, slots=True)
+class RecordRequest:
+    """The phone asks to start (``on=True``) or stop recording a clip."""
+
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ClipInfo:
+    """A finished clip recording.
+
+    Attributes:
+        path: The MCAP file.
+        frames: Camera frames written.
+        imu_samples: IMU samples written.
+        seconds: Time between the first and last frame.
+    """
+
+    path: Path
+    frames: int
+    imu_samples: int
+    seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class LinkStats:
+    """The phone's own view of its camera and WebRTC sender, sent once a second.
+
+    Every field is optional because browsers report different subsets.
+
+    Attributes:
+        camera_fps: Frames per second the camera delivers to the browser.
+        sent_fps: Frames per second the encoder sends.
+        width: Encoded frame width.
+        height: Encoded frame height.
+        quality_limitation: Why the encoder lowers quality or frame rate:
+            ``"none"``, ``"bandwidth"``, ``"cpu"`` or ``"other"``.
+        encoder: Encoder implementation name, e.g. a hardware codec.
+        codec: Negotiated codec MIME type.
+        encode_ms: Average encode time per frame.
+        target_kbps: Bitrate the encoder aims for.
+        available_kbps: Outgoing bandwidth the browser's estimator allows.
+        rtt_ms: Round-trip time to the laptop.
+        nack: Retransmission requests received so far.
+        pli: Keyframe requests received so far.
+    """
+
+    camera_fps: float | None = None
+    sent_fps: float | None = None
+    width: int | None = None
+    height: int | None = None
+    quality_limitation: str | None = None
+    encoder: str | None = None
+    codec: str | None = None
+    encode_ms: float | None = None
+    target_kbps: float | None = None
+    available_kbps: float | None = None
+    rtt_ms: float | None = None
+    nack: int | None = None
+    pli: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +256,36 @@ class DepthMap:
 
 
 @dataclass(frozen=True, slots=True)
+class MultiViewGeometry:
+    """Depth and cameras for a set of views, estimated jointly.
+
+    All arrays share the model's processing resolution ``(H, W)``.
+
+    Attributes:
+        depth: ``(N, H, W)`` float32 depth along the camera z axis.
+        confidence: ``(N, H, W)`` float32, higher is more reliable.
+        intrinsics: ``(N, 3, 3)`` float64 camera matrices at ``(H, W)``.
+        world_to_camera: ``(N, 4, 4)`` float64 poses (OpenCV camera axes).
+        images: ``(N, H, W, 3)`` uint8 RGB images the model saw.
+        is_metric: True only when depth and translations are in metres.
+    """
+
+    depth: NDArray[np.float32]
+    confidence: NDArray[np.float32]
+    intrinsics: NDArray[np.float64]
+    world_to_camera: NDArray[np.float64]
+    images: NDArray[np.uint8]
+    is_metric: bool
+
+    def __len__(self) -> int:
+        return int(self.depth.shape[0])
+
+    def camera_to_world(self) -> NDArray[np.float64]:
+        """``(N, 4, 4)`` camera-to-world poses."""
+        return np.asarray(np.linalg.inv(self.world_to_camera), dtype=np.float64)
+
+
+@dataclass(frozen=True, slots=True)
 class Pose:
     """Camera-to-world rigid transform.
 
@@ -187,14 +305,14 @@ class Pose:
         """
         r = self.matrix[:3, :3]
         t = self.matrix[:3, 3]
-        qx, qy, qz, qw = _rotation_to_quaternion(r)
+        qx, qy, qz, qw = rotation_to_quaternion(r)
         return (
             f"{self.timestamp_s:.6f} {t[0]:.6f} {t[1]:.6f} {t[2]:.6f} "
             f"{qx:.6f} {qy:.6f} {qz:.6f} {qw:.6f}"
         )
 
 
-def _rotation_to_quaternion(r: NDArray[np.float64]) -> tuple[float, float, float, float]:
+def rotation_to_quaternion(r: NDArray[np.float64]) -> tuple[float, float, float, float]:
     """Convert a rotation matrix to a unit quaternion ``(x, y, z, w)``."""
     trace = float(np.trace(r))
     if trace > 0.0:

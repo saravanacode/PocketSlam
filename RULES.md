@@ -5,19 +5,17 @@ These rules apply to all code in this repository. CI enforces every rule marked 
 ## 1. What the system does
 
 ```
- Phone (any browser)                          Mac / Linux host
- ┌──────────────────────┐   WebRTC (video)    ┌──────────────────────────────────────────┐
- │ web/ client          │ ──────────────────▶ │ transport/  receive frames (aiortc)      │
- │ getUserMedia camera  │   DataChannel       │      │                                   │
- │ intrinsics, IMU, ts  │ ──────────────────▶ │      ▼                                   │
- └──────────────────────┘                     │ depth/      monocular depth per frame    │
-          ▲   HTTPS signaling (offer/answer)  │      │                                   │
-          └────────────────────────────────── │      ▼                                   │
-                                              │ slam/       pose + map from RGB + depth  │
-                                              │      │                                   │
-                                              │      ▼                                   │
-                                              │ viz/        live view of map + trajectory│
-                                              └──────────────────────────────────────────┘
+ Phone (Chrome on Android)                   Laptop (Mac / Linux)
+ ┌─────────────────────────┐  WebRTC video   ┌───────────────────────────────────────────┐
+ │ web/phone/  :10001 HTTPS│ ──────────────▶ │ transport/  frames, metadata, IMU (aiortc)│
+ │ rear camera             │  DataChannel    │      │                                    │
+ │ gyroscope, accelerometer│ ──────────────▶ │      ├──▶ record/   MCAP file + live data │
+ └─────────────────────────┘                 │      │       │                            │
+          ▲  HTTPS signaling (offer/answer)  │      │       ▼                            │
+          └───────────────────────────────── │      │    server/dashboard  :8000 (8001)  │
+                                             │      ▼    web/dashboard/ live view        │
+                                             │ depth/ ─▶ slam/ ─▶ viz/                   │
+                                             └───────────────────────────────────────────┘
 ```
 
 "Device-agnostic" means two things, and both are hard requirements:
@@ -137,9 +135,9 @@ PocketSlam/
 ├── scripts/
 │   ├── check_structure.py      # enforces this section
 │   └── gen_dev_cert.sh         # local TLS cert for phone HTTPS
-├── web/                        # phone client: static HTML/JS, no build step
-│   ├── index.html
-│   └── app.js
+├── web/                        # static HTML/JS/CSS, no build step
+│   ├── phone/                  # capture page, served on :10001 over HTTPS
+│   └── dashboard/              # laptop live view, served on localhost :8000
 ├── src/pocketslam/
 │   ├── __init__.py
 │   ├── __main__.py             # entry point: `uv run python -m pocketslam`
@@ -149,7 +147,9 @@ PocketSlam/
 │   ├── core/                   # shared types, no heavy dependencies
 │   │   ├── types.py            # Frame, Intrinsics, Pose, DepthMap
 │   │   └── device.py           # the ONLY place that picks cuda/mps/cpu
-│   ├── server/                 # HTTPS + signaling (aiohttp)
+│   ├── server/                 # phone HTTPS + signaling, dashboard + LiveHub (aiohttp)
+│   ├── record/                 # Foxglove channels, MCAP writer, recording thread
+│   ├── recon/                  # offline reconstruction: reader, fuse, export, CLI
 │   ├── transport/              # WebRTC receive, frame queue, DataChannel
 │   ├── depth/                  # depth model interface + backends
 │   ├── slam/                   # tracking, mapping, loop closure
@@ -170,9 +170,12 @@ Dependencies point one way only. `import-linter` enforces this.
 
 ```
 server ─▶ pipeline ─▶ transport ─┐
+                    ├▶ record   ─┤
                     ├▶ depth    ─┼─▶ core
                     ├▶ slam     ─┤
                     └▶ viz      ─┘
+
+recon (offline) ─▶ depth, slam, record ─▶ core   (never imported by the live path)
 ```
 
 ```toml
@@ -207,6 +210,7 @@ Consequences:
 
 - `depth/` and `slam/` do not know WebRTC exists. They take `core.types.Frame` and return `core.types` objects. You can run them on a video file with no network.
 - `slam/` does not import a specific depth model. It takes a `DepthMap`.
+- `record/` does not know about the dashboard. It pushes encoded frames and IMU to a `LiveSink` protocol, which `server/dashboard.py` implements.
 
 ### 4.4 `scripts/check_structure.py` [gate]
 
@@ -246,18 +250,69 @@ This script exits non-zero if any of these checks fail:
 
 ### 5.3 Phone capture
 
-- The client is plain HTML/JS in `web/`. It must work on current iOS Safari and Android Chrome. Test on both before you merge client changes.
-- `getUserMedia` needs a secure context, so the host serves the client over **HTTPS** on the LAN. Use `scripts/gen_dev_cert.sh` (mkcert) for development. Never disable TLS to make a phone connect.
+- The client is plain HTML/JS/CSS in `web/phone/`. Android Chrome is the primary target; iOS Safari must not break. Test on a real phone before you merge client changes.
+- `getUserMedia` and motion sensors need a secure context, so the host serves the client over **HTTPS** on the LAN. `scripts/gen_dev_cert.sh` uses mkcert if installed, otherwise a self-signed certificate. Never disable TLS to make a phone connect.
 - Ask for the rear camera with `facingMode: "environment"` and an ideal resolution. Accept what the browser actually gives and report the real width and height to the host.
 - Each phone sends session metadata on the DataChannel: actual resolution, orientation, and intrinsics if known. If intrinsics are unknown, the host uses a calibration file for that device or an estimated value, and logs which one it used.
-- IMU data (DeviceMotion) is optional. iOS needs a user permission tap. The pipeline must run without IMU.
-- Every frame has a capture timestamp. Use the sender timestamp (RTP time or DataChannel clock sync), not host arrival time.
+- IMU is optional; the pipeline must run without it. The client uses the Generic Sensor API (`Gyroscope`, `Accelerometer`) at 100 Hz and falls back to `devicemotion` events if a sensor cannot start. iOS needs a permission tap.
+- IMU units are fixed: gyroscope in rad/s, accelerometer in m/s² **including gravity**, both in the phone's device frame. `devicemotion` reports deg/s with alpha/beta/gamma about z/x/y; the client converts it.
+- IMU travels as batched DataChannel messages: `{"type": "imu", "samples": [["g"|"a", t_ms, x, y, z], ...]}`, where `t_ms` is the phone's Unix time in ms. `transport/webrtc.py` validates every message.
+- Every sample has a sender timestamp: RTP time for video, sensor time for IMU. `core/clock.ClockMapper` maps each stream onto the host clock with a minimum-offset estimate. Never use host arrival time directly; it carries network jitter.
 
 ### 5.4 Real-time behaviour
 
 - Queues between stages are bounded. When a queue is full, drop the **oldest** frame. Latency beats completeness for live tracking.
 - Never block the asyncio event loop. Model inference and SLAM run in a worker thread or process.
 - Log per-stage latency and FPS. A PR that makes end-to-end latency worse by more than 10% on the reference sequence must explain why.
+
+### 5.5 Recording and live view
+
+- Clips are recorded with the **Record** button (phone page or dashboard strip). A clip goes to `data/recordings/clip_<UTC time>.mcap` and holds exactly the frames and IMU submitted between start and stop: start and stop travel through the recording thread's queue (`record/worker.py`). A clip still running when the phone disconnects is saved, not lost.
+- The phone sends `{"type": "record", "on": true|false}`; the laptop answers `{"type": "record_state", "on": ..., "clip": ..., "saved": ...}`. The dashboard uses `POST /api/record`.
+- Every saved clip with at least 10 frames is reconstructed automatically by `server/recording.ReconJobs`: one clip at a time, in a separate `pocketslam-recon` process, so model memory and GPU work stay out of the live server. Progress: `GET /api/jobs` and the 3D scans tab. `POCKETSLAM_AUTO_RECONSTRUCT=false` turns this off.
+- Whole-session recording to `data/recordings/<UTC time>_<session-id>.mcap` is off by default (`POCKETSLAM_RECORD=true` turns it on).
+- MCAP topics are fixed. Change them only together with the dashboard and any replay code:
+
+  | Topic | Schema | Content |
+  | --- | --- | --- |
+  | `/camera/image` | `foxglove.CompressedImage` | JPEG frame |
+  | `/camera/calibration` | `foxglove.CameraCalibration` | intrinsics, logged when they change |
+  | `/imu/gyro` | JSON `pocketslam.ImuVector` | rad/s |
+  | `/imu/accel` | JSON `pocketslam.ImuVector` | m/s², with gravity |
+  | `/phone/meta` | JSON `pocketslam.SessionMetadata` | resolution, device, intrinsics source |
+
+- Message `log_time` and `timestamp` are the host-clock time from `ClockMapper`, in nanoseconds.
+- JPEG encoding and MCAP writes run on the recording thread, never on the event loop. Its queue is bounded; overflow is dropped and counted (`record_dropped` on the dashboard).
+- A session must finish its MCAP file on every exit path: phone disconnect, replacement by a new phone, and SIGTERM.
+- One phone at a time. A new offer replaces the active session.
+- Ports: phone page **10001** (HTTPS, LAN). Dashboard **8000** on localhost, falling back to **8001** if 8000 is busy. Optional Foxglove WebSocket on **8765** (`POCKETSLAM_LIVE_VIEW=true`).
+
+### 5.6 Offline reconstruction
+
+- `uv run pocketslam-recon <recording.mcap>` turns a recording into depth maps, camera poses and one fused point cloud in `data/reconstructions/<name>/`: `recon.mcap` (Foxglove 3D), `points.ply`, `trajectory.tum`, `depth.npz`, `summary.json`.
+- It needs the optional extra: `uv sync --extra recon`. The live server never imports `recon` (import-linter contract).
+- Models and licenses. Ids and revisions live in `config.ReconSettings`; change them together.
+
+  | Role | Checkpoint | License |
+  | --- | --- | --- |
+  | Depth + poses + intrinsics | `depth-anything/DA3-LARGE-1.1` | CC BY-NC 4.0 per upstream README: non-commercial |
+  | Metric scale check | `depth-anything/DA3METRIC-LARGE` | Apache 2.0 |
+  | Commercial-safe fallback | `depth-anything/DA3-BASE` | Apache 2.0 |
+
+- `depth/da3.py` stubs DA3's export module before importing it. Do not remove the stub: the export helpers pull in `pycolmap`, whose OpenMP runtime aborts the process next to torch's.
+- Scale and gravity come from the IMU (`slam/vi_align.py`, VINS-Mono style least squares):
+  - Camera–IMU time offset: gyro speed vs visual rotation speed.
+  - Phone orientation: the best of four 90° candidates.
+  - Scale observability: accel std ≥ 0.2 m/s² and scale uncertainty ≤ 15%.
+  - If the IMU scale is not observable, the metric-depth scale is used; `summary.json` says which (`scale_source`).
+- Output world: z up (gravity-aligned), metres, camera poses camera-to-world in OpenCV axes.
+- Scale sources, in priority order (`recon/reconstruct._choose_scale`): fiducial marker, IMU (when observable), metric depth with the remembered marker correction, metric depth, none.
+- Marker scale (`recon/marker.py`): ArUco detection on full-resolution keyframes; per view, a plane is fitted to the depth inside the marker and corner rays are intersected with it; the median over at least 2 views is used and rejected above 20% spread. Marker size is the edge of the **black square**. The triangulated cross-check is reported only with at least 0.2 baseline-to-distance parallax.
+- Live calibration (`calib/live.py`, **Calibrate camera** in the dashboard): a worker thread detects the marker in the newest live frame, keeps views that differ by at least 25 px, and re-solves the focal length; it saves when the uncertainty is at most 5%, at least 10 views exist, and both a sideways and a vertical tilt were seen. Guidance goes to the dashboard (WebSocket `calibration` messages) and to the phone (DataChannel). `calib/` holds marker detection and the calibration store so both the live server and `recon/` can use them; the server never imports `recon/`.
+- Distance demo (`calib/distance.py`, `calib/demo.py`, **Distance demo** in the dashboard): `DistanceDemo` runs `LiveCalibration` when the phone has no saved focal length (or on "Calibrate again"), then `LiveDistance`. Distance is camera centre to marker centre from perspective-n-point on the four corners with the calibrated focal length. Use `cv2.SOLVEPNP_ITERATIVE` and reject poses that do not reproject within 5 px: OpenCV 5.0's `SOLVEPNP_IPPE_SQUARE` returns wrong poses for this input. Readings are a 5-frame median; the detector uses sub-pixel corner refinement.
+- The marker fixes sizes across the image; depth along the view direction is only right if the focal length is right. `pocketslam-calibrate` measures the focal length from tilted marker views and saves it only below 5% uncertainty. The marker's correction for the metric-depth scale is remembered **only** for phones with a measured focal length (`recon/calibration.py`, `data/calibration/scale.json`, keyed by phone model).
+- The dashboard's **3D scans** tab (`web/dashboard/scans.js`, plain WebGL2, no libraries) lists `data/reconstructions/` through `GET /api/scans` and loads `points.ply` and `trajectory.tum` through `GET /api/scans/{name}/{file}`. Only those file names are served, and scan names are validated, so the endpoint cannot read outside the folder.
+- Record clips for reconstruction with deliberate motion: move the phone 30–50 cm sideways while rotating a little. Pure rotation or a still phone gives no metric scale from the IMU.
 
 ## 6. Docker
 
@@ -271,7 +326,7 @@ This script exits non-zero if any of these checks fail:
 
 ### 6.2 Dockerfile rules [gate]
 
-- Multi-stage build: a `builder` stage installs dependencies with uv, and a `runtime` stage copies only `.venv`, `src/`, and `web/`.
+- Multi-stage build: a `builder` stage installs dependencies with uv, and a `runtime` stage copies only `.venv` and `web/` (the project is installed into `.venv` non-editable).
 - The base image is pinned by tag **and** digest (`python:3.12-slim-trixie@sha256:...`). The uv image is pinned the same way. Renovate or Dependabot updates the digests.
 - Install dependencies with `uv sync --frozen --no-dev`. Copy `pyproject.toml` and `uv.lock` first and install before you copy source, so the dependency layer stays cached.
 - The container runs as a non-root user.
@@ -301,7 +356,7 @@ Must exclude at least: `.git`, `.venv`, `data/`, `**/__pycache__`, `.cache`, `*.
 - **Errors:** never catch a bare `except:` or `except Exception: pass`. One phone disconnecting must not crash the server or other sessions.
 - **Shutdown:** handle SIGTERM. Close peer connections, flush the map, and stop workers within 10 s.
 - **Security:** the server is LAN-only by default. Any internet exposure needs auth on signaling. Validate and size-limit every DataChannel message.
-- **Outputs:** maps and trajectories are written to `data/outputs/<session-id>/` in standard formats (PLY for point clouds, TUM format for trajectories).
+- **Outputs:** recordings are MCAP files in `data/recordings/` (section 5.5). Maps and trajectories are written to `data/outputs/<session-id>/` in standard formats (PLY for point clouds, TUM format for trajectories).
 
 ## 8. Evaluation
 

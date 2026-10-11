@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PocketSlam dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="strip" id="strip" data-state="idle">
+    <h1>PocketSlam</h1>
+    <nav class="tabs" aria-label="Views">
+      <a href="#live" id="tab-live" aria-current="page">Live</a>
+      <a href="#scans" id="tab-scans">3D scans</a>
+    </nav>
+    <p class="lamp"><span class="lamp-dot" aria-hidden="true"></span><span id="lamp-label">Waiting for phone</span></p>
+    <button type="button" id="rec-button" class="rec-toggle" aria-pressed="false" disabled>
+      <span class="rec-dot" aria-hidden="true"></span><span id="rec-label">Record</span>
+    </button>
+    <button type="button" id="cal-button" class="strip-button" aria-pressed="false" disabled>Calibrate camera</button>
+    <button type="button" id="demo-button" class="strip-button" aria-pressed="false" disabled>Distance demo</button>
+    <p class="timecode" id="timecode" aria-label="Recording time">00:00:00.0</p>
+    <p class="file" id="file" title="">No recording</p>
+  </header>
+
+  <main class="grid" id="view-live">
+    <div class="left">
+      <section class="camera" aria-label="Live camera">
+        <canvas id="frame" width="1280" height="720"></canvas>
+        <div class="empty" id="empty">
+          <h2>Open this address on your phone</h2>
+          <p class="url" id="phone-url">Starting…</p>
+          <p>Use Chrome on Android. If a certificate warning appears, tap Advanced, then Proceed. Tap Start streaming; recording starts by itself.</p>
+        </div>
+      </section>
+
+      <div class="cal-panel" id="cal-panel" hidden>
+        <p class="cal-hint" id="cal-hint" aria-live="polite"></p>
+        <ul class="cal-sides" aria-label="Views collected from each side">
+          <li data-side="left">Left <span></span></li>
+          <li data-side="right">Right <span></span></li>
+          <li data-side="above">Above <span></span></li>
+          <li data-side="below">Below <span></span></li>
+        </ul>
+        <p class="cal-result" id="cal-result"></p>
+      </div>
+
+      <section class="dist-panel" id="dist-panel" aria-label="Distance to marker" hidden>
+        <div class="dist-readout">
+          <h2>Distance to marker</h2>
+          <p class="dist-value" id="dist-value" aria-live="off">–</p>
+          <p class="dist-detail" id="dist-detail"></p>
+          <div class="dist-actions">
+            <button type="button" id="dist-recal">Calibrate again</button>
+            <button type="button" id="dist-stop">Stop demo</button>
+          </div>
+        </div>
+        <canvas id="dist-plot" aria-label="Distance over the last 30 seconds"></canvas>
+      </section>
+
+      <dl class="facts" aria-label="Session">
+        <div><dt>Device</dt><dd id="device">–</dd></div>
+        <div><dt>Resolution</dt><dd id="res">–</dd></div>
+        <div><dt>Intrinsics</dt><dd id="intrinsics">–</dd></div>
+        <div><dt>Phone page</dt><dd id="phone-url-side">–</dd></div>
+
+        <div><dt>Camera</dt><dd id="camera-fps">–</dd></div>
+        <div><dt>Phone sent</dt><dd id="sent-fps">–</dd></div>
+        <div><dt>Laptop received</dt><dd id="recv-fps">–</dd></div>
+        <div><dt>Video on dashboard</dt><dd id="fps">–</dd></div>
+
+        <div><dt>Bitrate, target of allowed</dt><dd id="bitrate">–</dd></div>
+        <div><dt>Encoder</dt><dd id="encoder">–</dd></div>
+        <div><dt>Round trip</dt><dd id="rtt">–</dd></div>
+        <div><dt>Laptop event-loop lag</dt><dd id="lag">–</dd></div>
+
+        <div><dt>Frames in this clip</dt><dd id="recorded">–</dd></div>
+        <div><dt>Dropped by recorder</dt><dd id="dropped">–</dd></div>
+        <div><dt>IMU samples</dt><dd id="imu-count">–</dd></div>
+        <div><dt>Late frames skipped</dt><dd id="skipped">–</dd></div>
+      </dl>
+    </div>
+
+    <div class="right">
+      <section class="trace" aria-label="Gyroscope">
+        <header><h2>Gyroscope</h2><span class="unit">rad/s</span><span class="rate" id="gyro-rate">–</span></header>
+        <canvas id="gyro-plot"></canvas>
+      </section>
+
+      <section class="trace" aria-label="Accelerometer">
+        <header><h2>Accelerometer</h2><span class="unit">m/s², with gravity</span><span class="rate" id="accel-rate">–</span></header>
+        <canvas id="accel-plot"></canvas>
+      </section>
+
+      <p class="legend"><span class="x">x</span><span class="y">y</span><span class="z">z</span> Phone axes. Last 10 seconds.</p>
+    </div>
+  </main>
+
+  <main class="scans" id="view-scans" hidden>
+    <aside class="scan-list" aria-label="Scans">
+      <header>
+        <h2>Scans</h2>
+        <button type="button" id="scan-refresh" class="ghost">Refresh</button>
+      </header>
+      <ul id="job-items" class="jobs" aria-live="polite"></ul>
+      <ul id="scan-items"></ul>
+      <p class="hint" id="scan-hint">Turn a recording into a scan:<br><code>uv run pocketslam-recon data/recordings/&lt;file&gt;.mcap --duration 5</code></p>
+    </aside>
+
+    <section class="viewer" aria-label="3D view">
+      <canvas id="viewer" tabindex="0" aria-label="Point cloud. Drag to orbit, right-drag to pan, scroll to zoom, W A S D to move."></canvas>
+      <div class="viewer-empty" id="viewer-empty">
+        <h2>No scan selected</h2>
+        <p>Pick a scan on the left. If the list is empty, run <code>pocketslam-recon</code> on a recording first.</p>
+      </div>
+      <div class="viewer-top">
+        <p class="scan-title" id="scan-title"></p>
+        <div class="viewer-tools">
+          <button type="button" id="tool-reset">Reset view</button>
+          <button type="button" id="tool-measure" aria-pressed="false">Measure</button>
+          <button type="button" id="tool-path" aria-pressed="true">Camera path</button>
+          <label class="size">Point size <input type="range" id="tool-size" min="0.5" max="4" step="0.25" value="1.5"></label>
+        </div>
+      </div>
+      <p class="readout" id="measure-readout" aria-live="polite"></p>
+      <p class="grid-label" id="grid-label"></p>
+      <p class="help">Drag to orbit. Right-drag or Shift-drag to pan. Scroll to zoom. W A S D Q E to move. Double-click a point to look at it.</p>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+  <script src="/static/scans.js"></script>
+</body>
+</html>

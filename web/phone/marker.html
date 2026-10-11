@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PocketSlam marker</title>
+  <style>
+    /* White everywhere: the detector finds the marker by its black square on a light surround. */
+    html, body { margin: 0; min-height: 100vh; background: #fff; color: #15233b; font: 16px/1.4 system-ui, sans-serif; }
+    main { display: grid; justify-items: center; gap: 20px; padding: 24px; }
+    img { display: block; width: var(--size, 420px); height: auto; image-rendering: pixelated; }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: center; }
+    button { padding: 8px 16px; border: 1px solid #c3cbd4; border-radius: 6px; background: #f4f6f8; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+    button:focus-visible, input:focus-visible { outline: 2px solid #2d5fb5; outline-offset: 2px; }
+    input[type="range"] { width: min(60vw, 420px); }
+    p { margin: 0; max-width: 62ch; text-align: center; }
+    .size { font-weight: 650; font-size: 1.1rem; }
+    body.clean .controls, body.clean p { display: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <img id="marker" src="/marker.png" alt="ArUco calibration marker">
+    <div class="controls">
+      <button type="button" id="smaller">Smaller</button>
+      <input type="range" id="size" min="150" max="1400" step="1" aria-label="Marker size on screen">
+      <button type="button" id="larger">Larger</button>
+      <button type="button" id="hide">Hide controls</button>
+    </div>
+    <p class="size" id="target"></p>
+    <p>Hold a ruler against the screen and adjust until the <strong>black square</strong> (not the white border) is exactly that wide. Keep this window on a white page with nothing dark touching the white border, and turn the screen brightness up. Click the marker to show the controls again.</p>
+  </main>
+  <script>
+    "use strict";
+    const img = document.getElementById("marker");
+    const slider = document.getElementById("size");
+    function setSize(px) {
+      const v = Math.max(150, Math.min(1400, Math.round(px)));
+      slider.value = v;
+      img.style.setProperty("--size", `${v}px`);
+      try { localStorage.setItem("marker-size", v); } catch { /* private window */ }
+    }
+    let saved = 630;
+    try { saved = Number(localStorage.getItem("marker-size")) || 630; } catch { /* private window */ }
+    setSize(saved);
+    slider.addEventListener("input", () => setSize(Number(slider.value)));
+    document.getElementById("smaller").addEventListener("click", () => setSize(Number(slider.value) - 2));
+    document.getElementById("larger").addEventListener("click", () => setSize(Number(slider.value) + 2));
+    document.getElementById("hide").addEventListener("click", () => document.body.classList.add("clean"));
+    img.addEventListener("click", () => document.body.classList.remove("clean"));
+    fetch("/marker.json").then((r) => r.json()).then((m) => {
+      const cm = m.size_m ? `${(m.size_m * 100).toFixed(1)} cm` : "the size set in POCKETSLAM_RECON_MARKER_SIZE_M";
+      document.getElementById("target").textContent = `Black square edge: ${cm} (marker id ${m.id ?? "any"})`;
+    }).catch(() => {});
+  </script>
+</body>
+</html>
